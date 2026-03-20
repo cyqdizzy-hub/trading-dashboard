@@ -1,5 +1,5 @@
 import streamlit as st
-import akshare as ak
+import yfinance as yf
 import datetime
 import time
 
@@ -12,21 +12,21 @@ if 'current_price' not in st.session_state:
 if 'update_time' not in st.session_state:
     st.session_state.update_time = "手动设置"
 
-# --- 获取最新现价的函数 ---
-def fetch_realtime_price(symbol="159934"):
+# --- 获取最新现价的函数 (针对海外服务器优化的 yfinance 版本) ---
+def fetch_realtime_price(symbol="159934.SZ"):
     try:
-        end_date = datetime.date.today()
-        start_date = end_date - datetime.timedelta(days=30)
-        df = ak.fund_etf_hist_em(symbol=symbol, period="daily", 
-                                 start_date=start_date.strftime("%Y%m%d"), 
-                                 end_date=end_date.strftime("%Y%m%d"), adjust="qfq")
-        if df is not None and not df.empty:
-            latest_price = float(df.iloc[-1]['收盘'])
-            latest_date = df.iloc[-1]['日期']
-            return latest_price, f"{latest_date} 收盘价"
+        # 使用 yfinance 获取数据，加上 .SZ 代表深交所
+        ticker = yf.Ticker(symbol)
+        # 获取最近 1 天的交易数据
+        hist = ticker.history(period="1d")
+        if not hist.empty:
+            latest_price = float(hist['Close'].iloc[-1])
+            latest_date = hist.index[-1].strftime("%Y-%m-%d")
+            return latest_price, f"{latest_date} 数据"
     except Exception as e:
         return None, str(e)
     return None, "获取失败"
+
 
 # --- 界面构建 ---
 st.title("📈 黄金 ETF (159934) 加仓风控模拟器")
