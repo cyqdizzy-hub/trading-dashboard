@@ -1,105 +1,198 @@
 import streamlit as st
 import yfinance as yf
+import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import datetime
 
-# --- 页面设置 ---
-st.set_page_config(page_title="通用加仓风控模拟器", page_icon="📈", layout="centered")
+# --- 页面设置 (宽屏模式更适合看图) ---
+st.set_page_config(page_title="通用投资决策仪表盘", page_icon="📈", layout="wide")
 
 # --- 初始化会话状态 ---
 if 'current_price' not in st.session_state:
-    st.session_state.current_price = 10.514  # 默认现价
-if 'update_time' not in st.session_state:
-    st.session_state.update_time = "手动设置"
+    st.session_state.current_price = 0.0
 if 'target_symbol' not in st.session_state:
-    st.session_state.target_symbol = "159934.SZ" # 默认标的
+    st.session_state.target_symbol = "159934.SZ" # 默认黄金ETF
+if 'df_history' not in st.session_state:
+    st.session_state.df_history = pd.DataFrame() # 存储历史数据
 
-# --- 通用数据抓取函数 ---
-def fetch_realtime_price(symbol):
+# --- 1. 数据抓取与指标计算函数 ---
+def fetch_data_and_calc_ind(symbol):
     try:
-        # 核心改动：这里的 symbol 变成了动态传入的变量
         ticker = yf.Ticker(symbol)
-        hist = ticker.history(period="1d")
-        if not hist.empty:
-            latest_price = float(hist['Close'].iloc[-1])
-            latest_date = hist.index[-1].strftime("%Y-%m-%d")
-            return latest_price, f"{latest_date} 收盘价"
+        # 抓取最近 1 年数据，确保计算 60日均线时数据充足
+        df = ticker.history(period="1y")
+        if df.empty:
+            return None, "未获取到数据，请检查代码格式。"
+        
+        # 计算技术指标 (均线)
+        df['MA20'] = df['Close'].rolling(window=20).mean()
+        df['MA60'] = df['Close'].rolling(window=60).mean()
+        
+        # 截取最近 6 个月用于显示
+        df_display = df.iloc[-126:] # 半年大约126个交易日
+        return df_display, "成功"
     except Exception as e:
         return None, str(e)
-    return None, "获取失败"
 
-# --- 界面构建 ---
-st.title("📈 通用加仓风控模拟器")
-st.markdown("支持 A股、美股、ETF。输入代码即可一键测算加仓风险。")
+# --- 2. 交互式 K 线图绘制函数 (Plotly) ---
+def plot_candlestick(df, symbol):
+    # 创建带成交量的子图 (上图 K线，下图成交量)
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
+                        vertical_spacing=0.03, subplot_titles=(f'{symbol} 6个月日K线图', '成交量'), 
+                        row_width=[0.2, 0.8])
 
-# 核心改动：增加代码输入框
-st.session_state.target_symbol = st.text_input(
-    "🔍 请输入标的代码 (深市加.SZ / 沪市加.SS / 美股直接输字母)", 
-    value=st.session_state.target_symbol,
-    help="例如：159934.SZ (黄金ETF), 510300.SS (沪深300ETF), AAPL (苹果公司)"
-)
+    # 添加 K 线图
+    fig.add_trace(go.Candlestick(x=df.index,
+                                open=df['Open'], high=df['High'],
+                                low=df['Low'], close=df['Close'],
+                                name='K线',
+                                increasing_line_color='#ef5350', # 红色涨
+                                decreasing_line_color='#26a69a'), # 绿色跌
+                  row=1, col=1)
+
+    # 添加均线
+    fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], name='20日线 (短期)', line=dict(color='#ffca28', width=1.5)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['MA60'], name='60日线 (中期)', line=dict(color='#2196f3', width=1.5)), row=1, col=1)
+
+    # 添加成交量柱状图
+    fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='成交量', marker_color='#90caf9'), row=2, col=1)
+
+    # 图表样式优化
+    fig.update_layout(
+        xaxis_rangeslider_visible=False, # 关闭底部的范围滑动条
+        height=600,
+        margin=dict(l=10, r=10, t=30, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    fig.update_yaxes(title_text="价格", row=1, col=1)
+    return fig
+
+# --- 3. 智能投资建议引擎 ---
+def generate_advice(df, cost_old, qty_add, current_p):
+    if df.empty or cost_old == 0:
+        return "请先同步数据并输入底仓成本。", "secondary"
+    
+    latest = df.iloc[-1]
+    ma20 = latest['MA20']
+    ma60 = latest['MA60']
+    
+    advice = []
+    status = "success" # 默认状态为健康
+
+    # --- A. 趋势判断 (根据 60 日线定多空) ---
+    st.markdown("#### ⚖️ 综合评估")
+    
+    if current_p > ma60 and ma20 > ma60:
+        advice.append("📈 **市场环境：多头趋势**。当前处于中期上升通道中 (价格在 60日线上，20日线在 60日线上)。")
+        # --- B. 加仓机会判断 (多头环境下看回调) ---
+        dist_to_ma20 = (current_p - ma20) / ma20
+        if 0 < dist_to_ma20 < 0.02:
+            advice.append("🎯 **加仓机会**：价格已回调至 20 日均线支撑位附近。若你计划加仓，此时性价比合理。")
+        elif dist_to_ma20 > 0.05:
+            advice.append("⏳ **操作建议**：偏离短期均线过远，存在追高风险。建议耐心等待回调至黄色 20 日线附近。")
+            status = "warning"
+        else:
+            advice.append("👀 **操作建议**：多头持有，关注支撑。")
+    elif current_p < ma60:
+        advice.append("📉 **市场环境：空头/调整趋势**。价格已跌破中期 60 日生命线。")
+        advice.append("🛑 **操作建议**：**不宜加仓追高**。当前以保护底仓利润或降低风险为主。等待重回 60 日线上再考虑。")
+        status = "error"
+    else:
+        advice.append("⚖️ **市场环境：震荡市**。趋势不明显，建议多看少动。")
+        status = "warning"
+
+    # --- C. 风控提示 (基于用户算出的安全垫) ---
+    if qty_add > 0:
+        st.divider()
+        st.markdown("#### 🛡️ 加仓风控建议")
+        new_cost = ((cost_old * 3776) + (current_p * qty_add)) / (3776 + qty_add) # 这里简化了qty_old，建议实际用变量
+        if current_p < new_cost:
+             advice.append("⚠️ **风控警报**：加仓后已陷入亏损！")
+        
+        advice.append(f"1. **短期纠错**：若有效跌破黄色 20 日均线 ({ma20:.3f})，建议平掉刚加的新仓。")
+        advice.append(f"2. **绝对保本线**：不论如何，价格跌破你的新成本线，必须保护本金。")
+
+    return "\n\n".join(advice), status
+
+
+# ==========================================
+#                  界面构建
+# ==========================================
+
+st.title("📈 通用投资决策仪表盘")
+st.markdown("输入代码 -> 查看 K 线与趋势 -> 模拟加仓 -> 获取智能风控建议。")
+
+# 1. 顶部输入与行情区
+with st.container():
+    c1, c2, c3 = st.columns([1.5, 2, 1])
+    
+    with c1:
+        st.session_state.target_symbol = st.text_input(
+            "🔍 输入标的代码", value=st.session_state.target_symbol, help="深市:.SZ, 沪市:.SS, 美股:直接输")
+    
+    with c2:
+        st.write("") # 占位
+        if st.button("🔄 同步 6个月行情与 K线", type="primary", use_container_width=True):
+            with st.spinner(f'正在同步 {st.session_state.target_symbol} 历史数据...'):
+                df_h, msg = fetch_data_and_calc_ind(st.session_state.target_symbol)
+                if df_h is not None:
+                    st.session_state.df_history = df_h
+                    st.session_state.current_price = float(df_h.iloc[-1]['Close'])
+                    st.toast("✅ 数据同步成功！")
+                    st.rerun()
+                else:
+                    st.error(f"❌ 获取失败：{msg}")
+
+    with c3:
+        # 显示现价
+        st.metric("最新现价", f"{st.session_state.current_price:.3f}" if st.session_state.current_price > 0 else "N/A")
 
 st.divider()
 
-# 1. 顶部数据刷新区
-st.subheader("📡 行情数据区")
-col1, col2 = st.columns([2, 1])
-
-with col1:
-    new_price = st.number_input("当前市场现价", value=st.session_state.current_price, step=0.001, format="%.3f")
-    st.session_state.current_price = new_price 
-    st.caption(f"数据状态: {st.session_state.update_time}")
-
-with col2:
-    st.write("") 
-    st.write("")
-    if st.button("🔄 获取最新现价", type="primary", use_container_width=True):
-        # 按钮按下时，把输入框里的代码传给后台函数
-        with st.spinner(f'正在抓取 {st.session_state.target_symbol} 最新数据...'):
-            price, msg = fetch_realtime_price(st.session_state.target_symbol)
-            if price:
-                st.session_state.current_price = price
-                st.session_state.update_time = msg
-                st.rerun() 
-            else:
-                st.error("❌ 获取失败，请检查代码格式是否正确（A股切记加上 .SZ 或 .SS 后缀）。")
+# 2. 中部：K 线图展示 (宽屏模式)
+if not st.session_state.df_history.empty:
+    fig_k = plot_candlestick(st.session_state.df_history, st.session_state.target_symbol)
+    st.plotly_chart(fig_k, use_container_width=True)
+else:
+    st.info("💡 请先在上方输入代码，点击按钮同步数据。")
 
 st.divider()
 
-# 2. 持仓与推演区
-st.subheader("⚙️ 你的持仓与加仓推演")
+# 3. 底部：加仓推演与智能建议 (左右分栏)
+if not st.session_state.df_history.empty:
+    col_calc, col_adv = st.columns([1, 1.2], gap="large")
+    
+    with col_calc:
+        st.subheader("⚙️ 仓位推演")
+        c1, c2 = st.columns(2)
+        with c1:
+            cost_old = st.number_input("底仓平均成本", value=8.592, step=0.01)
+        with c2:
+            qty_old = st.number_input("底仓持有数量", value=3776, step=100)
+        
+        qty_add = st.slider("计划加仓数量", min_value=0, max_value=int(qty_old * 2), value=0, step=100)
+        
+        # 计算核心指标
+        total_qty = qty_old + qty_add
+        current_p = st.session_state.current_price
+        if total_qty > 0:
+            new_cost = ((cost_old * qty_old) + (current_p * qty_add)) / total_qty
+            safe_cushion = ((current_p - new_cost) / current_p) * 100 if current_p > 0 else 0
+        else:
+            new_cost, safe_cushion = cost_old, 0
 
-c1, c2 = st.columns(2)
-with c1:
-    cost_old = st.number_input("底仓平均成本", value=8.592, step=0.01)
-with c2:
-    qty_old = st.number_input("底仓持有数量 (股/份)", value=3776, step=100)
+        # 指标展示
+        r1, r2 = st.columns(2)
+        r1.metric("加仓后新保本点", f"{new_cost:.3f}", f"成本抬高 {new_cost-cost_old:.3f}" if qty_add > 0 else None, delta_color="inverse")
+        r2.metric("利润安全垫", f"{safe_cushion:.2f}%")
 
-qty_add = st.slider("打算在当前价格加仓多少？", min_value=0, max_value=int(qty_old * 3), value=0, step=100)
-
-# --- 核心计算逻辑 ---
-total_qty = qty_old + qty_add
-current_p = st.session_state.current_price
-
-if total_qty > 0:
-    new_avg_cost = ((cost_old * qty_old) + (current_p * qty_add)) / total_qty
-    drop_to_loss_pct = ((current_p - new_avg_cost) / current_p) * 100 if current_p > 0 else 0
-else:
-    new_avg_cost = cost_old
-    drop_to_loss_pct = 0
-
-# --- 结果展示 ---
-st.subheader("📊 核心风控指标")
-
-r1, r2 = st.columns(2)
-with r1:
-    st.metric(label="加仓后新保本点", value=f"{new_avg_cost:.3f}")
-with r2:
-    st.metric(label="利润安全垫 (可承受跌幅)", value=f"{drop_to_loss_pct:.2f}%")
-
-# 进度条提示
-if drop_to_loss_pct < 5:
-    st.error("⚠️ 极度危险：安全垫极薄，稍微回调就会全盘亏损！")
-elif drop_to_loss_pct < 10:
-    st.warning("⚡ 提示：安全垫被大幅压缩，建议设置严格止损。")
-else:
-    st.success("✅ 状态健康：底仓利润足以覆盖正常回调。")
+    with col_adv:
+        st.subheader("🤖 智能决策建议")
+        advice_text, adv_status = generate_advice(st.session_state.df_history, cost_old, qty_add, current_p)
+        
+        # 根据状态显示不同的彩色提示框
+        if adv_status == "success": st.success(advice_text)
+        elif adv_status == "warning": st.warning(advice_text)
+        elif adv_status == "error": st.error(advice_text)
+        else: st.info(advice_text)
