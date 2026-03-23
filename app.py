@@ -4,63 +4,67 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import datetime
+import requests # 新增：用于伪装请求
 
-# --- 页面设置 (宽屏模式更适合看图) ---
+# --- 页面设置 ---
 st.set_page_config(page_title="通用投资决策仪表盘", page_icon="📈", layout="wide")
 
 # --- 初始化会话状态 ---
 if 'current_price' not in st.session_state:
     st.session_state.current_price = 0.0
 if 'target_symbol' not in st.session_state:
-    st.session_state.target_symbol = "159934.SZ" # 默认黄金ETF
+    st.session_state.target_symbol = "159934.SZ"
 if 'df_history' not in st.session_state:
-    st.session_state.df_history = pd.DataFrame() # 存储历史数据
+    st.session_state.df_history = pd.DataFrame()
 
-# --- 1. 数据抓取与指标计算函数 ---
+# --- 1. 数据抓取与指标计算函数 (加入缓存和防屏蔽机制) ---
+# 这里的 ttl=3600 表示缓存保留 1 小时，1 小时内重复查询同一代码不会重新发起网络请求
+@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_data_and_calc_ind(symbol):
     try:
-        ticker = yf.Ticker(symbol)
-        # 抓取最近 1 年数据，确保计算 60日均线时数据充足
-        df = ticker.history(period="1y")
-        if df.empty:
-            return None, "未获取到数据，请检查代码格式。"
+        # 建立一个伪装成浏览器的会话
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        })
         
-        # 计算技术指标 (均线)
+        # 使用伪装的会话去请求雅虎财经
+        ticker = yf.Ticker(symbol, session=session)
+        df = ticker.history(period="1y")
+        
+        if df.empty:
+            return None, "未获取到数据，请检查代码格式是否正确。"
+        
+        # 计算技术指标
         df['MA20'] = df['Close'].rolling(window=20).mean()
         df['MA60'] = df['Close'].rolling(window=60).mean()
         
-        # 截取最近 6 个月用于显示
-        df_display = df.iloc[-126:] # 半年大约126个交易日
+        # 截取最近半年
+        df_display = df.iloc[-126:] 
         return df_display, "成功"
     except Exception as e:
         return None, str(e)
 
-# --- 2. 交互式 K 线图绘制函数 (Plotly) ---
+# --- 2. 交互式 K 线图绘制函数 ---
 def plot_candlestick(df, symbol):
-    # 创建带成交量的子图 (上图 K线，下图成交量)
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
                         vertical_spacing=0.03, subplot_titles=(f'{symbol} 6个月日K线图', '成交量'), 
                         row_width=[0.2, 0.8])
 
-    # 添加 K 线图
     fig.add_trace(go.Candlestick(x=df.index,
                                 open=df['Open'], high=df['High'],
                                 low=df['Low'], close=df['Close'],
                                 name='K线',
-                                increasing_line_color='#ef5350', # 红色涨
-                                decreasing_line_color='#26a69a'), # 绿色跌
+                                increasing_line_color='#ef5350', 
+                                decreasing_line_color='#26a69a'), 
                   row=1, col=1)
 
-    # 添加均线
     fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], name='20日线 (短期)', line=dict(color='#ffca28', width=1.5)), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['MA60'], name='60日线 (中期)', line=dict(color='#2196f3', width=1.5)), row=1, col=1)
-
-    # 添加成交量柱状图
     fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='成交量', marker_color='#90caf9'), row=2, col=1)
 
-    # 图表样式优化
     fig.update_layout(
-        xaxis_rangeslider_visible=False, # 关闭底部的范围滑动条
+        xaxis_rangeslider_visible=False, 
         height=600,
         margin=dict(l=10, r=10, t=30, b=10),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
@@ -78,63 +82,55 @@ def generate_advice(df, cost_old, qty_add, current_p):
     ma60 = latest['MA60']
     
     advice = []
-    status = "success" # 默认状态为健康
+    status = "success" 
 
-    # --- A. 趋势判断 (根据 60 日线定多空) ---
     st.markdown("#### ⚖️ 综合评估")
     
     if current_p > ma60 and ma20 > ma60:
-        advice.append("📈 **市场环境：多头趋势**。当前处于中期上升通道中 (价格在 60日线上，20日线在 60日线上)。")
-        # --- B. 加仓机会判断 (多头环境下看回调) ---
+        advice.append("📈 **市场环境：多头趋势**。当前处于中期上升通道中。")
         dist_to_ma20 = (current_p - ma20) / ma20
         if 0 < dist_to_ma20 < 0.02:
-            advice.append("🎯 **加仓机会**：价格已回调至 20 日均线支撑位附近。若你计划加仓，此时性价比合理。")
+            advice.append("🎯 **加仓机会**：价格已回调至 20 日均线支撑位附近，性价比合理。")
         elif dist_to_ma20 > 0.05:
-            advice.append("⏳ **操作建议**：偏离短期均线过远，存在追高风险。建议耐心等待回调至黄色 20 日线附近。")
+            advice.append("⏳ **操作建议**：偏离短期均线过远，存在追高风险。建议耐心等待回调。")
             status = "warning"
         else:
             advice.append("👀 **操作建议**：多头持有，关注支撑。")
     elif current_p < ma60:
-        advice.append("📉 **市场环境：空头/调整趋势**。价格已跌破中期 60 日生命线。")
-        advice.append("🛑 **操作建议**：**不宜加仓追高**。当前以保护底仓利润或降低风险为主。等待重回 60 日线上再考虑。")
+        advice.append("📉 **市场环境：空头/调整趋势**。价格已跌破中期生命线。")
+        advice.append("🛑 **操作建议**：**不宜加仓追高**。以保护底仓利润或降低风险为主。")
         status = "error"
     else:
-        advice.append("⚖️ **市场环境：震荡市**。趋势不明显，建议多看少动。")
+        advice.append("⚖️ **市场环境：震荡市**。趋势不明显，多看少动。")
         status = "warning"
 
-    # --- C. 风控提示 (基于用户算出的安全垫) ---
     if qty_add > 0:
         st.divider()
         st.markdown("#### 🛡️ 加仓风控建议")
-        new_cost = ((cost_old * 3776) + (current_p * qty_add)) / (3776 + qty_add) # 这里简化了qty_old，建议实际用变量
+        new_cost = ((cost_old * 3776) + (current_p * qty_add)) / (3776 + qty_add)
         if current_p < new_cost:
              advice.append("⚠️ **风控警报**：加仓后已陷入亏损！")
         
-        advice.append(f"1. **短期纠错**：若有效跌破黄色 20 日均线 ({ma20:.3f})，建议平掉刚加的新仓。")
-        advice.append(f"2. **绝对保本线**：不论如何，价格跌破你的新成本线，必须保护本金。")
+        advice.append(f"1. **短期纠错**：若有效跌破 20 日均线 ({ma20:.3f})，建议平掉新仓。")
+        advice.append(f"2. **绝对保本线**：若跌破新成本线，必须无条件清仓。")
 
     return "\n\n".join(advice), status
-
 
 # ==========================================
 #                  界面构建
 # ==========================================
-
 st.title("📈 通用投资决策仪表盘")
 st.markdown("输入代码 -> 查看 K 线与趋势 -> 模拟加仓 -> 获取智能风控建议。")
 
-# 1. 顶部输入与行情区
 with st.container():
     c1, c2, c3 = st.columns([1.5, 2, 1])
-    
     with c1:
-        st.session_state.target_symbol = st.text_input(
-            "🔍 输入标的代码", value=st.session_state.target_symbol, help="深市:.SZ, 沪市:.SS, 美股:直接输")
+        st.session_state.target_symbol = st.text_input("🔍 输入标的代码", value=st.session_state.target_symbol, help="深市:.SZ, 沪市:.SS, 美股:直接输")
     
     with c2:
-        st.write("") # 占位
+        st.write("") 
         if st.button("🔄 同步 6个月行情与 K线", type="primary", use_container_width=True):
-            with st.spinner(f'正在同步 {st.session_state.target_symbol} 历史数据...'):
+            with st.spinner(f'正在同步 {st.session_state.target_symbol} ...'):
                 df_h, msg = fetch_data_and_calc_ind(st.session_state.target_symbol)
                 if df_h is not None:
                     st.session_state.df_history = df_h
@@ -145,12 +141,10 @@ with st.container():
                     st.error(f"❌ 获取失败：{msg}")
 
     with c3:
-        # 显示现价
         st.metric("最新现价", f"{st.session_state.current_price:.3f}" if st.session_state.current_price > 0 else "N/A")
 
 st.divider()
 
-# 2. 中部：K 线图展示 (宽屏模式)
 if not st.session_state.df_history.empty:
     fig_k = plot_candlestick(st.session_state.df_history, st.session_state.target_symbol)
     st.plotly_chart(fig_k, use_container_width=True)
@@ -159,7 +153,6 @@ else:
 
 st.divider()
 
-# 3. 底部：加仓推演与智能建议 (左右分栏)
 if not st.session_state.df_history.empty:
     col_calc, col_adv = st.columns([1, 1.2], gap="large")
     
@@ -173,7 +166,6 @@ if not st.session_state.df_history.empty:
         
         qty_add = st.slider("计划加仓数量", min_value=0, max_value=int(qty_old * 2), value=0, step=100)
         
-        # 计算核心指标
         total_qty = qty_old + qty_add
         current_p = st.session_state.current_price
         if total_qty > 0:
@@ -182,7 +174,6 @@ if not st.session_state.df_history.empty:
         else:
             new_cost, safe_cushion = cost_old, 0
 
-        # 指标展示
         r1, r2 = st.columns(2)
         r1.metric("加仓后新保本点", f"{new_cost:.3f}", f"成本抬高 {new_cost-cost_old:.3f}" if qty_add > 0 else None, delta_color="inverse")
         r2.metric("利润安全垫", f"{safe_cushion:.2f}%")
@@ -191,7 +182,6 @@ if not st.session_state.df_history.empty:
         st.subheader("🤖 智能决策建议")
         advice_text, adv_status = generate_advice(st.session_state.df_history, cost_old, qty_add, current_p)
         
-        # 根据状态显示不同的彩色提示框
         if adv_status == "success": st.success(advice_text)
         elif adv_status == "warning": st.warning(advice_text)
         elif adv_status == "error": st.error(advice_text)
