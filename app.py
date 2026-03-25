@@ -9,7 +9,7 @@ import akshare as ak
 from datetime import datetime, timedelta
 
 # --- 页面设置 ---
-st.set_page_config(page_title="多因子投研风控终端 3.3", page_icon="icon.png", layout="wide")
+st.set_page_config(page_title="FactorX (灵犀终端)", page_icon="🛰️", layout="wide")
 
 # ==========================================
 #        0. 云端多用户记忆引擎
@@ -62,29 +62,30 @@ if "u" in query_params and "p" in query_params and not st.session_state.logged_i
         st.session_state.logged_in, st.session_state.current_user = True, magic_user
 
 if not st.session_state.logged_in:
-    st.title("🔐 多因子投研风控终端 3.3")
-    tab_login, tab_register = st.tabs(["🔑 账号登录", "📝 注册新账号"])
+    st.title("🔐 FactorX (灵犀终端) - 授权验证")
+    st.markdown("欢迎接入 FactorX 多因子投研引擎。请验证您的通行密钥。")
+    tab_login, tab_register = st.tabs(["🔑 身份接入", "📝 申请密钥"])
     with tab_login:
         with st.form("login_form"):
-            login_user = st.text_input("用户名")
-            login_pwd = st.text_input("密码", type="password")
-            if st.form_submit_button("登录", type="primary"):
+            login_user = st.text_input("终端标识 (用户名)")
+            login_pwd = st.text_input("安全密钥 (密码)", type="password")
+            if st.form_submit_button("接入终端", type="primary"):
                 db = load_all_cloud_data()
                 if login_user in db["users"] and db["users"][login_user] == hash_password(login_pwd):
                     st.session_state.logged_in, st.session_state.current_user = True, login_user
                     st.rerun()
-                else: st.error("❌ 密码错误。")
+                else: st.error("❌ 密钥校验失败。")
     with tab_register:
         with st.form("register_form"):
-            reg_user = st.text_input("设置用户名 (≥3位)")
-            reg_pwd = st.text_input("设置密码 (≥6位)", type="password")
-            reg_pwd_confirm = st.text_input("确认密码", type="password")
-            if st.form_submit_button("注册并登录"):
+            reg_user = st.text_input("设置终端标识 (≥3位)")
+            reg_pwd = st.text_input("设置安全密钥 (≥6位)", type="password")
+            reg_pwd_confirm = st.text_input("确认密钥", type="password")
+            if st.form_submit_button("注册并接入"):
                 if len(reg_user) < 3 or len(reg_pwd) < 6 or reg_pwd != reg_pwd_confirm:
-                    st.error("检查输入要求或确认密码！")
+                    st.error("检查输入要求或确认密钥一致性！")
                 else:
                     db = load_all_cloud_data()
-                    if reg_user in db["users"]: st.error("❌ 用户名已被注册。")
+                    if reg_user in db["users"]: st.error("❌ 标识已被占用。")
                     else:
                         db["users"][reg_user] = hash_password(reg_pwd)
                         db["watchlists"][reg_user] = {}
@@ -96,8 +97,8 @@ if not st.session_state.logged_in:
 # ==========================================
 #        2. 主程序 (侧边栏)
 # ==========================================
-st.sidebar.title(f"👋 {st.session_state.current_user} 的终端")
-if st.sidebar.button("🚪 安全退出"):
+st.sidebar.title(f"👋 {st.session_state.current_user} 的灵犀工作站")
+if st.sidebar.button("🚪 断开连接"):
     st.session_state.logged_in, st.session_state.current_user = False, ""
     st.rerun()
 st.sidebar.divider()
@@ -113,7 +114,7 @@ if 'df_history' not in st.session_state: st.session_state.df_history = pd.DataFr
 if 'fundamentals' not in st.session_state: st.session_state.fundamentals = {}
 if 'data_source' not in st.session_state: st.session_state.data_source = ""
 
-if st.sidebar.button("➕ 手动输入新标的", type="primary" if st.session_state.sidebar_select == "" else "secondary", use_container_width=True):
+if st.sidebar.button("➕ 载入新监测标的", type="primary" if st.session_state.sidebar_select == "" else "secondary", use_container_width=True):
     st.session_state.sidebar_select = ""
     st.rerun()
 st.sidebar.divider()
@@ -182,7 +183,7 @@ def fetch_multi_factor_data(symbol):
                 ak_df.rename(columns={'日期':'Date', '开盘':'Open', '收盘':'Close', '最高':'High', '最低':'Low', '成交量':'Volume'}, inplace=True)
                 ak_df.index = pd.to_datetime(ak_df['Date'])
                 df = ak_df.tail(250)
-                source_name = "AKShare (东方财富数据中心)"
+                source_name = "AKShare (东方财富底层数据)"
         except Exception:
             pass
             
@@ -219,20 +220,20 @@ def plot_candlestick(df, symbol, name):
 # ==========================================
 #        4. UI 展示面板与智能打分
 # ==========================================
-st.title("🛰️ 3.3 多因子投研风控终端")
+st.title("🛰️ FactorX (灵犀终端) - 核心指挥舱")
 ui_key = default_sym if default_sym else "new_entry"
 
 with st.container():
     c1, c2, c3, c4, c5 = st.columns([1.2, 1.2, 1, 1, 1.2])
-    with c1: input_symbol = st.text_input("代码", value=default_sym, key=f"sym_{ui_key}")
+    with c1: input_symbol = st.text_input("代码", value=default_sym, key=f"sym_{ui_key}", help="深市:.SZ, 沪市:.SS, 美股直接输")
     with c2: input_name = st.text_input("名称", value=default_name, key=f"name_{ui_key}")
     with c3: input_cost = st.number_input("底仓成本", value=default_cost, step=0.01, key=f"cost_{ui_key}")
     with c4: input_qty = st.number_input("持仓数量", value=default_qty, step=100, key=f"qty_{ui_key}")
     with c5:
         st.write("") 
-        if st.button("🔄 同步全维数据", type="primary", use_container_width=True):
+        if st.button("🔄 启动灵犀多维扫描", type="primary", use_container_width=True):
             if input_symbol:
-                with st.spinner(f'智能路由双引擎抓取 {input_symbol} 中...'):
+                with st.spinner(f'FactorX 引擎正在深度解析 {input_symbol} ...'):
                     df_h, funds, msg, source = fetch_multi_factor_data(input_symbol)
                     if df_h is not None:
                         st.session_state.df_history = df_h
@@ -241,7 +242,7 @@ with st.container():
                         st.session_state.data_source = source
                     else: st.error(f"❌ {msg}")
 
-if st.button("💾 更新至专属空间"):
+if st.button("💾 将标的写入 FactorX 云端矩阵"):
     if input_symbol:
         st.session_state.watchlist[input_symbol] = {
             "name": input_name, "cost": input_cost, "qty": input_qty, "category": get_category(input_symbol) 
@@ -256,7 +257,7 @@ st.divider()
 
 if not st.session_state.df_history.empty and st.session_state.current_price > 0:
     
-    st.caption(f"**📡 底层数据信源：** 已通过智能路由接入 `{st.session_state.data_source}`")
+    st.caption(f"**📡 FactorX 实时数据链：** 已成功接驳 `{st.session_state.data_source}`")
     
     col_chart, col_risk = st.columns([2, 1], gap="medium")
     with col_chart:
@@ -273,7 +274,7 @@ if not st.session_state.df_history.empty and st.session_state.current_price > 0:
         st.metric("新保本点", f"{new_cost:.3f}", f"成本变化 {new_cost-input_cost:.3f}" if qty_add>0 else None, delta_color="inverse")
         st.metric("利润安全垫", f"{safe_cushion:.2f}%")
         if qty_add > 0:
-            st.caption(f"**铁律：** 若跌破新成本线 {new_cost:.2f}，立即止损保本。")
+            st.caption(f"**灵犀铁律：** 若跌破新成本线 {new_cost:.2f}，立即执行止损保本程序。")
 
     st.markdown("### 📊 多因子全息体检报告")
     f1, f2, f3 = st.columns(3)
@@ -288,103 +289,100 @@ if not st.session_state.df_history.empty and st.session_state.current_price > 0:
     with f1:
         st.info("🧠 **资金与情绪面**")
         st.write(f"**RSI (14日):** {rsi:.1f}")
-        if rsi > 70: st.error("🔥 情绪狂热 (超买)，警惕砸盘。")
-        elif rsi < 30: st.success("🧊 情绪冰点 (超卖)，随时反弹。")
-        else: st.write("⚖️ 情绪中性。")
+        if rsi > 70: st.error("🔥 情绪狂热 (超买)，警惕资金砸盘。")
+        elif rsi < 30: st.success("🧊 情绪冰点 (超卖)，随时技术反弹。")
+        else: st.write("⚖️ 资金博弈情绪中性。")
         vol, vol_ma5 = df.iloc[-1]['Volume'], df.iloc[-1]['Vol_MA5']
-        if vol > vol_ma5 * 1.8: st.write("⚡ 今日剧烈放量异动！")
-        elif vol < vol_ma5 * 0.6: st.write("💤 今日极致缩量观望。")
-        else: st.write("🌊 资金平稳交投。")
+        if vol > vol_ma5 * 1.8: st.write("⚡ 监测到剧烈放量异动！")
+        elif vol < vol_ma5 * 0.6: st.write("💤 资金交投进入极致缩量。")
+        else: st.write("🌊 资金池水位平稳。")
 
     with f2:
         st.success("💼 **深度基本面**")
         margin = fund.get('Margin')
         st.write(f"**ROE:** {f'{roe*100:.1f}%' if roe else '未知'}")
-        if roe and roe > 0.15: st.caption("🏆 卓越的赚钱机器 (ROE>15%)")
+        if roe and roe > 0.15: st.caption("🏆 卓越的印钞能力 (ROE>15%)")
         pe_str = f"{pe:.1f}" if pe else '未知'
         st.write(f"**动态市盈率 (PE):** {pe_str}")
         if pe and pe < 15: st.caption("💎 估值处于安全水域")
-        elif pe and pe > 40: st.caption("⚠️ 估值溢价较高")
+        elif pe and pe > 40: st.caption("⚠️ 估值溢价较高，防范戴维斯双杀")
 
     with f3:
         st.warning("🏛️ **趋势与宏观对比**")
-        if current_p > ma60 and ma20 > ma60: st.write("📈 **中期趋势：** 多头排列。")
-        elif current_p < ma60: st.write("📉 **中期趋势：** 空头破位。")
-        else: st.write("⚖️ **中期趋势：** 震荡不明。")
+        if current_p > ma60 and ma20 > ma60: st.write("📈 **中期趋势：** 多头右侧通道。")
+        elif current_p < ma60: st.write("📉 **中期趋势：** 空头破位深水区。")
+        else: st.write("⚖️ **中期趋势：** 震荡方向未明。")
         w52 = fund.get('52w_Change')
         st.write(f"**近一年涨跌幅:** {f'{w52*100:.1f}%' if w52 else '未知'}")
-        if w52 and w52 > 0.2: st.caption("🚀 过去一年显著跑赢大盘。")
-        elif w52 and w52 < -0.1: st.caption("⚓ 过去一年走势弱于大盘。")
+        if w52 and w52 > 0.2: st.caption("🚀 过去一年显著跑赢宏观大盘。")
+        elif w52 and w52 < -0.1: st.caption("⚓ 过去一年走势相对疲软。")
 
     st.markdown("---")
-    st.markdown("### 📝 综合诊断结论与操作建议")
+    st.markdown("### 📝 FactorX 综合诊断结论与操作指令")
     
     score = 0
     reasons = []
 
     if current_p > ma60 and ma20 > ma60:
         score += 1
-        reasons.append("✔ **趋势面向好：** 价格稳居60日生命线及20日均线上方，处于多头通道。")
+        reasons.append("✔ **趋势因子得分：** 价格稳居60日生命线及20日均线上方，处于确定的多头通道。")
     elif current_p < ma60:
         score -= 1
-        reasons.append("❌ **趋势面走弱：** 价格已跌破60日生命线，中线资金呈流出态势。")
+        reasons.append("❌ **趋势因子失分：** 价格已跌破60日生命线，中线资金呈流出态势，技术面承压。")
     else:
-        reasons.append("➖ **趋势面纠结：** 均线系统方向未明，处于震荡整理期。")
+        reasons.append("➖ **趋势因子纠结：** 均线系统方向未明，处于多空震荡整理期。")
 
     if pe is not None:
         if pe < 20 and (roe is not None and roe > 0.10):
             score += 1
-            reasons.append("✔ **基本面优秀：** 估值较低（PE<20）且盈利能力强劲（ROE>10%），具备长线配置价值。")
+            reasons.append("✔ **价值因子得分：** 估值较低（PE<20）且盈利能力强劲（ROE>10%），具备优秀的长线配置底座。")
         elif pe > 40:
             score -= 1
-            reasons.append("❌ **基本面高估：** 动态市盈率偏高，短期存在杀估值的泡沫破裂风险。")
+            reasons.append("❌ **价值因子失分：** 动态市盈率偏高，短期存在杀估值的泡沫破裂风险。")
 
     if rsi > 70:
         score -= 1
-        reasons.append("❌ **情绪面过热：** RSI指标进入超买区，短期散户FOMO情绪严重，随时面临回调。")
+        reasons.append("❌ **情绪因子失分：** RSI指标进入超买区，短期散户FOMO情绪严重，极易诱发均线回归回调。")
     elif rsi < 30:
         score += 1
-        reasons.append("✔ **情绪面超卖：** RSI指标极度冰点，做空动能衰竭，具备技术性反弹条件。")
+        reasons.append("✔ **情绪因子得分：** RSI指标处于极度冰点，做空动能面临衰竭，具备可操作的技术性反弹条件。")
     
     if score >= 2:
-        st.success("🟢 **核心结论：强烈看多 (Strong Buy / Hold)**")
-        st.write("多维因子产生共振向好，建议积极配置或坚定持有底仓。")
+        st.success("🟢 **核心指令：强烈看多 (Strong Buy / Hold)**")
+        st.write("FactorX 扫描结果显示多维因子产生共振向好，建议积极配置或坚定持有底仓，享受趋势红利。")
     elif score == 1:
-        st.info("🟡 **核心结论：谨慎乐观 (Cautious Optimism)**")
-        st.write("整体偏向多头，基本面或趋势有亮点，可逢低适度建仓，但需注意防守。")
+        st.info("🟡 **核心指令：谨慎乐观 (Cautious Optimism)**")
+        st.write("FactorX 扫描显示整体偏向多头，基本面或趋势有亮点，可利用加仓推演模块逢低适度建仓，严守防守线。")
     elif score == 0:
-        st.warning("⚪ **核心结论：中性观望 (Neutral)**")
-        st.write("多空因素交织，缺乏明确的单边驱动力，建议多看少动，等待方向明朗。")
+        st.warning("⚪ **核心指令：中性观望 (Neutral)**")
+        st.write("多空因子交织对冲，缺乏明确的单边驱动力，建议多看少动，等待方向明朗。")
     else:
-        st.error("🔴 **核心结论：防范风险 (Risk Warning / Sell)**")
-        st.write("技术面破位或估值严重透支，建议减仓规避或耐心等待真正的企稳信号，切忌盲目接飞刀。")
+        st.error("🔴 **核心指令：防范风险 (Risk Warning / Sell)**")
+        st.write("技术面破位或估值严重透支，建议迅速减仓规避，或耐心等待真正的企稳信号，切忌盲目接飞刀。")
 
-    with st.expander("🔍 点击查看详细评分理由", expanded=True):
+    with st.expander("🔍 点击查看 FactorX 详细评分逻辑推演", expanded=True):
         for reason in reasons:
             st.markdown(reason)
 
-    # ==========================================
-    # 💡 新增：投研模型说明与数据字典
-    # ==========================================
     st.markdown("---")
-    with st.expander("📖 投研模型说明与数据来源 (Methodology & Sources)", expanded=False):
+    with st.expander("📖 FactorX 投研模型说明与数据字典", expanded=False):
         st.markdown("""
         #### 1. 资金与情绪面 (Momentum & Sentiment)
-        * **数据来源：** K线衍生计算 (Yahoo Finance / AKShare)
+        * **数据来源：** K线衍生计算 (Yahoo Finance / AKShare 双引擎)
         * **逻辑依据：** * **RSI (相对强弱指数)：** 采用14日周期计算。`RSI > 70` 被视为市场极度贪婪（超买区），系统予以扣分（-1）；`RSI < 30` 被视为市场极度恐慌（超卖区），具备反弹势能，系统予以加分（+1）。
             * **量能异动：** 对比当日成交量与过去5日平均成交量（Vol_MA5）。若超出均量 1.8 倍，视为资金强介入/强出逃预警。
         
         #### 2. 深度基本面 (Fundamentals)
         * **数据来源：** Yahoo Finance API 公司财报数据底层接口 (`trailingPE`, `returnOnEquity` 等)
         * **逻辑依据：** * **PE (动态市盈率)：** 衡量回本周期。若 `PE < 20` 且 `ROE > 10%`，代表公司既便宜又能赚钱，符合价值投资审美，系统加分（+1）。若 `PE > 40`，除非有极高成长性消化，否则视为泡沫风险，系统扣分（-1）。
-            * **ROE (净资产收益率)：** 巴菲特最看重的指标。`ROE > 15%` 判定为优质资产。*(注：部分 A 股或宽基 ETF 无直接财报接口，此项不参与打分。)*
+            * **ROE (净资产收益率)：** 衡量资产盈利能力的核心指标。`ROE > 15%` 判定为优质印钞机。*(注：部分 A 股或宽基 ETF 无直接财报接口，此项自动略过不参与打分。)*
 
         #### 3. 趋势与宏观对比 (Macro Trend)
         * **数据来源：** 日K线移动平均计算，及52周价格对比。
-        * **逻辑依据：** * **双均线趋势：** 20日线为短期防守位，60日线为牛熊生命线。若现价站稳双线（`现价 > MA60` 且 `MA20 > MA60`），视为右侧交易的绝对多头，系统加分（+1）；跌破 MA60 则视为趋势走坏，系统扣分（-1）。
+        * **逻辑依据：** * **双均线趋势：** 20日线为短期防守位，60日线为中线牛熊生命线。若现价站稳双线（`现价 > MA60` 且 `MA20 > MA60`），视为右侧交易的绝对多头，系统加分（+1）；跌破 MA60 则视为趋势彻底走坏，系统扣分（-1）。
             
-        > **⚠️ 免责声明：** 本系统评级机制由固定量化因子（趋势、估值、情绪）赋予机械权重计算得出。结论仅作为交易时的防冲动“交叉验证”参考工具，**绝不构成任何实质性的买卖及投资理财建议**。交易决策需结合当时宏观政策及个人风险承受能力独立做出。
+        > **⚠️ FactorX 终端免责声明：** 本系统多因子评级机制由固定算法量化测算得出。所有结论仅作为交易时的“交叉验证”风控工具，**绝不构成任何实质性的买卖指导及投资理财建议**。实盘交易决策需结合现实宏观政策及个人风险承受能力独立做出，盈亏自负。
         """)
 
 else:
-    st.info("💡 请在上方确认代码后，点击“同步全维数据”。")
+    st.info("💡 请在上方确认代码后，点击“启动灵犀多维扫描”。")
