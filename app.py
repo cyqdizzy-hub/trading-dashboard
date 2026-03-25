@@ -7,10 +7,10 @@ import requests
 import hashlib
 
 # --- 页面设置 ---
-st.set_page_config(page_title="通用投资决策仪表盘", page_icon="icon.png", layout="wide")
+st.set_page_config(page_title="通用投资决策仪表盘 2.0", page_icon="icon.png", layout="wide")
 
 # ==========================================
-#        0. 云端多用户记忆引擎 (含加密)
+#        0. 云端多用户记忆引擎
 # ==========================================
 API_KEY = st.secrets["JSONBIN_KEY"]
 BIN_ID = st.secrets["JSONBIN_ID"]
@@ -46,26 +46,21 @@ def get_category(symbol):
     else: return "🌍 其他标的"
 
 # ==========================================
-#        1. 登录与注册验证系统 (极致稳定版)
+#        1. 登录与注册验证系统
 # ==========================================
-if 'logged_in' not in st.session_state:
-    st.session_state.logged_in = False
-if 'current_user' not in st.session_state:
-    st.session_state.current_user = ""
+if 'logged_in' not in st.session_state: st.session_state.logged_in = False
+if 'current_user' not in st.session_state: st.session_state.current_user = ""
 
 if not st.session_state.logged_in:
     st.title("🔐 通用投资决策仪表盘")
     st.markdown("请先登录或注册您的专属云端账号。")
-    
     tab_login, tab_register = st.tabs(["🔑 账号登录", "📝 注册新账号"])
     
     with tab_login:
         with st.form("login_form"):
             login_user = st.text_input("用户名")
             login_pwd = st.text_input("密码", type="password")
-            submit_login = st.form_submit_button("登录", type="primary")
-            
-            if submit_login:
+            if st.form_submit_button("登录", type="primary"):
                 db = load_all_cloud_data()
                 if login_user in db["users"] and db["users"][login_user] == hash_password(login_pwd):
                     st.session_state.logged_in = True
@@ -73,16 +68,14 @@ if not st.session_state.logged_in:
                     st.success("登录成功！正在进入您的专属空间...")
                     st.rerun()
                 else:
-                    st.error("❌ 用户名或密码错误，请重试。")
+                    st.error("❌ 用户名或密码错误。")
                     
     with tab_register:
         with st.form("register_form"):
             reg_user = st.text_input("设置用户名 (不少于3个字符)")
             reg_pwd = st.text_input("设置密码 (不少于6个字符)", type="password")
             reg_pwd_confirm = st.text_input("确认密码", type="password")
-            submit_register = st.form_submit_button("注册并登录")
-            
-            if submit_register:
+            if st.form_submit_button("注册并登录"):
                 if len(reg_user) < 3 or len(reg_pwd) < 6 or reg_pwd != reg_pwd_confirm:
                     st.error("请检查输入要求或确认密码是否一致！")
                 else:
@@ -93,7 +86,6 @@ if not st.session_state.logged_in:
                         db["users"][reg_user] = hash_password(reg_pwd)
                         db["watchlists"][reg_user] = {}
                         save_to_cloud(db)
-                        
                         st.session_state.logged_in = True
                         st.session_state.current_user = reg_user
                         st.success("✅ 注册成功！")
@@ -104,12 +96,10 @@ if not st.session_state.logged_in:
 #        2. 主程序 (仅登录后可见)
 # ==========================================
 st.sidebar.title(f"👋 欢迎回来, {st.session_state.current_user}")
-
 if st.sidebar.button("🚪 退出登录"):
     st.session_state.logged_in = False
     st.session_state.current_user = ""
     st.rerun()
-
 st.sidebar.divider()
 
 if 'watchlist' not in st.session_state or st.session_state.get('last_user') != st.session_state.current_user:
@@ -120,6 +110,7 @@ if 'watchlist' not in st.session_state or st.session_state.get('last_user') != s
 
 if 'current_price' not in st.session_state: st.session_state.current_price = 0.0
 if 'df_history' not in st.session_state: st.session_state.df_history = pd.DataFrame()
+if 'current_pe' not in st.session_state: st.session_state.current_pe = None
 
 if st.sidebar.button("➕ 手动输入新标的", type="primary" if st.session_state.sidebar_select == "" else "secondary", use_container_width=True):
     st.session_state.sidebar_select = ""
@@ -138,14 +129,11 @@ for cat, items in categories_dict.items():
     for sym, data in items:
         col1, col2 = st.sidebar.columns([4, 1])
         btn_type = "primary" if st.session_state.sidebar_select == sym else "secondary"
-        
         display_name = data.get('name', '')
         btn_label = f"{display_name} ({sym})" if display_name else f"📊 {sym}"
-        
         if col1.button(btn_label, key=f"sel_{sym}", type=btn_type, use_container_width=True):
             st.session_state.sidebar_select = sym
             st.rerun()
-            
         if col2.button("🗑️", key=f"del_{sym}", help=f"删除 {sym}"):
             del st.session_state.watchlist[sym]
             db = load_all_cloud_data()
@@ -164,15 +152,37 @@ if st.session_state.sidebar_select and st.session_state.sidebar_select in st.ses
 else:
     default_sym, default_name, default_cost, default_qty = "", "", 0.0, 0
 
+# 💡 核心升级：获取更多维度的数据 (含 MACD, 量能与 PE)
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_data_and_calc_ind(symbol):
     try:
+        # 获取 K 线数据
         df = yf.download(symbol, period="1y", progress=False, threads=False)
-        if df is None or len(df) == 0: return None, "获取数据失败，请检查代码格式是否正确。"
+        if df is None or len(df) == 0: return None, None, "获取数据失败，请检查代码格式是否正确。"
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+        
+        # 1. 均线系统
         df['MA20'], df['MA60'] = df['Close'].rolling(window=20).mean(), df['Close'].rolling(window=60).mean()
-        return df.iloc[-126:], "成功"
-    except Exception as e: return None, str(e)
+        
+        # 2. 量能均线 (5日平均成交量)
+        df['Vol_MA5'] = df['Volume'].rolling(window=5).mean()
+        
+        # 3. MACD 指标手搓计算
+        exp1 = df['Close'].ewm(span=12, adjust=False).mean()
+        exp2 = df['Close'].ewm(span=26, adjust=False).mean()
+        df['MACD'] = exp1 - exp2
+        df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+        df['MACD_Hist'] = df['MACD'] - df['Signal']
+
+        # 4. 获取基本面 PE (市盈率)
+        try:
+            ticker_info = yf.Ticker(symbol).info
+            pe_ratio = ticker_info.get('trailingPE', ticker_info.get('forwardPE', None))
+        except:
+            pe_ratio = None
+            
+        return df.iloc[-126:], pe_ratio, "成功"
+    except Exception as e: return None, None, str(e)
 
 def plot_candlestick(df, symbol, name):
     title = f"{name} ({symbol}) - 6个月日K线图" if name else f"{symbol} - 6个月日K线图"
@@ -184,14 +194,13 @@ def plot_candlestick(df, symbol, name):
     fig.update_layout(xaxis_rangeslider_visible=False, height=500, margin=dict(l=10, r=10, t=30, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     return fig
 
-st.title("📈 通用投资决策仪表盘")
-
+st.title("📈 通用投资决策仪表盘 2.0")
 ui_key = default_sym if default_sym else "new_entry"
 
 with st.container():
     c1, c2, c3, c4, c5 = st.columns([1.2, 1.2, 1, 1, 1.2])
     with c1: input_symbol = st.text_input("🔍 标的代码", value=default_sym, key=f"sym_{ui_key}", help="深市:.SZ, 沪市:.SS, 美股直接输")
-    with c2: input_name = st.text_input("🏷️ 标的名称", value=default_name, key=f"name_{ui_key}", placeholder="如: 黄金ETF")
+    with c2: input_name = st.text_input("🏷️ 标的名称", value=default_name, key=f"name_{ui_key}")
     with c3: input_cost = st.number_input("底仓成本", value=default_cost, step=0.01, key=f"cost_{ui_key}")
     with c4: input_qty = st.number_input("持仓数量", value=default_qty, step=100, key=f"qty_{ui_key}")
     
@@ -199,28 +208,25 @@ with st.container():
         st.write("") 
         if st.button("🔄 同步K线与现价", type="primary", use_container_width=True):
             if input_symbol:
-                with st.spinner(f'正在同步 {input_symbol} ...'):
-                    df_h, msg = fetch_data_and_calc_ind(input_symbol)
+                with st.spinner(f'正在深度解析 {input_symbol} 的量价与基本面...'):
+                    df_h, pe_val, msg = fetch_data_and_calc_ind(input_symbol)
                     if df_h is not None:
                         st.session_state.df_history = df_h
                         st.session_state.current_price = float(df_h.iloc[-1]['Close'])
+                        st.session_state.current_pe = pe_val
                     else:
                         st.error(f"❌ 获取失败：{msg}")
 
 if st.button("💾 将当前标的保存/更新至专属空间"):
     if input_symbol:
         st.session_state.watchlist[input_symbol] = {
-            "name": input_name, 
-            "cost": input_cost, 
-            "qty": input_qty,
-            "category": get_category(input_symbol) 
+            "name": input_name, "cost": input_cost, "qty": input_qty, "category": get_category(input_symbol) 
         }
         db = load_all_cloud_data()
         db["watchlists"][st.session_state.current_user] = st.session_state.watchlist
         save_to_cloud(db)
-        
         st.session_state.sidebar_select = input_symbol 
-        st.success(f"✅ 已成功保存！")
+        st.success("✅ 已成功保存！")
         st.rerun() 
 
 st.divider()
@@ -250,21 +256,41 @@ if not st.session_state.df_history.empty and st.session_state.current_price > 0:
         r2.metric("利润安全垫", f"{safe_cushion:.2f}%")
 
     with col_adv:
-        st.subheader("🤖 智能决策建议")
+        st.subheader("🤖 智能决策建议 (多维共振)")
         df = st.session_state.df_history
         ma20, ma60 = df.iloc[-1]['MA20'], df.iloc[-1]['MA60']
         
+        # 1. 均线趋势判定
         if current_p > ma60 and ma20 > ma60:
-            st.success("📈 **多头趋势**：价格站上60日均线。")
-            if 0 < (current_p - ma20)/ma20 < 0.02: st.success("🎯 **绝佳买点**：已回调至20日线附近，支撑较强。")
-            elif (current_p - ma20)/ma20 >= 0.02: st.warning("⏳ **注意追高**：偏离20日线较远，建议等待回调。")
+            st.success(f"📈 **主趋势：** 站上 60 日线，**多头格局**。")
+            if 0 < (current_p - ma20)/ma20 < 0.02: st.caption("🎯 距 20 日线极近，短线防守性价比高。")
+            elif (current_p - ma20)/ma20 >= 0.03: st.caption("⏳ 偏离 20 日均线较远，严防冲高回落。")
         elif current_p < ma60:
-            st.error("📉 **空头/调整趋势**：已跌破60日生命线，严禁盲目加仓，等待企稳。")
+            st.error(f"📉 **主趋势：** 跌破 60 日线，**空头/调整格局**，忌盲目抄底。")
         else:
-            st.info("⚖️ **震荡整理**：趋势不清晰，多看少动。")
+            st.info(f"⚖️ **主趋势：** 震荡整理，趋势不清晰。")
+
+        # 2. 量能异动判定
+        vol, vol_ma5 = df.iloc[-1]['Volume'], df.iloc[-1]['Vol_MA5']
+        if vol > vol_ma5 * 2:
+            st.warning(f"🔥 **资金面：** 今日**放量异动** (超5日均量2倍)！若为突破则看多，若在高位需防出货。")
+        elif vol < vol_ma5 * 0.5:
+            st.info(f"🧊 **资金面：** 今日**极致缩量**，面临方向变盘选择。")
             
-        if qty_add > 0:
-            st.markdown("---")
-            st.markdown(f"**🛡️ 本次加仓防守线：** 若跌破 20日线 ({ma20:.3f}) 平掉新仓；若跌破新成本线 ({new_cost:.3f}) 彻底清仓保本。")
+        # 3. MACD 动能判定 (取最后两天的柱子对比)
+        hist, prev_hist = df.iloc[-1]['MACD_Hist'], df.iloc[-2]['MACD_Hist']
+        if hist > 0 and prev_hist <= 0:
+            st.success(f"✨ **动能面：** MACD 刚刚形成 **金叉**，短线做多动能增强！")
+        elif hist < 0 and prev_hist >= 0:
+            st.error(f"⚠️ **动能面：** MACD 刚刚形成 **死叉**，短线空头释放，警惕回调！")
+
+        # 4. 基本面估值判定
+        pe_val = st.session_state.current_pe
+        pe_text = "未知 (可能为ETF或数据缺失)" if pe_val is None else f"{pe_val:.2f}"
+        st.markdown(f"**🏢 估值面 (动态PE):** {pe_text}")
+        if pe_val:
+            if pe_val < 15: st.caption("🟢 当前估值较低具备较高安全边际 (仅供参考)。")
+            elif pe_val > 30: st.caption("🔴 当前估值偏高，注意成长性是否能消化高估值风险。")
+
 else:
     st.info("💡 请在上方确认代码后，点击“同步K线与现价”。")
