@@ -13,28 +13,20 @@ import os
 st.set_page_config(page_title="FactorX (灵犀终端)", page_icon="🛰️", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
-#        🎨 深度 UI 美化 (CSS 注入) - 侧边栏修复版
+#        🎨 深度 UI 美化 (CSS 注入)
 # ==========================================
 def inject_custom_css():
     st.markdown("""
         <style>
-        /* 1. 隐藏多余元素，但【保留】顶部的侧边栏呼出按钮 */
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
-        
-        /* 💡 修复核心：不再完全隐藏 header，而是将其背景设为透明 */
         header {background-color: transparent !important;}
-        
-        /* 单独精准狙击，隐藏右上角的 Deploy(部署) 按钮 */
         [data-testid="stAppDeployButton"] {display: none;}
         
-        /* 2. 全局字体与背景微调 */
         .block-container {
             padding-top: 2rem;
             padding-bottom: 2rem;
         }
-
-        /* 3. 美化 Metric 数据看板 (卡片化 + 悬浮阴影) */
         div[data-testid="metric-container"] {
             background-color: rgba(130, 130, 130, 0.05);
             border: 1px solid rgba(130, 130, 130, 0.2);
@@ -47,8 +39,6 @@ def inject_custom_css():
             transform: translateY(-2px);
             box-shadow: 0 8px 15px rgba(0,0,0,0.1);
         }
-
-        /* 4. 美化所有 Button 按钮 (增加圆角与交互动效) */
         .stButton > button {
             border-radius: 8px;
             font-weight: 600;
@@ -58,11 +48,19 @@ def inject_custom_css():
             transform: translateY(-2px);
             box-shadow: 0 5px 10px rgba(0,0,0,0.15);
         }
-        
-        /* 5. 登录界面居中对齐 */
         .login-header {
             text-align: center;
             margin-bottom: 20px;
+        }
+        /* 新闻链接悬浮效果 */
+        .news-link {
+            text-decoration: none;
+            color: #1E88E5;
+            font-weight: 500;
+        }
+        .news-link:hover {
+            text-decoration: underline;
+            color: #0D47A1;
         }
         </style>
     """, unsafe_allow_html=True)
@@ -73,7 +71,6 @@ inject_custom_css()
 #        🖼️ 智能 Logo 渲染模块
 # ==========================================
 def render_logo(width=80, use_column=False):
-    """智能寻找本地 icon.png 并渲染，找不到则不报错"""
     if os.path.exists("icon.png"):
         if use_column:
             col1, col2, col3 = st.columns([1, 2, 1])
@@ -122,7 +119,7 @@ def get_category(symbol):
     else: return "🌍 其他标的"
 
 # ==========================================
-#        1. 登录系统 (含高级居中排版)
+#        1. 登录系统 
 # ==========================================
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
 if 'current_user' not in st.session_state: st.session_state.current_user = ""
@@ -137,7 +134,6 @@ if "u" in query_params and "p" in query_params and not st.session_state.logged_i
 
 if not st.session_state.logged_in:
     spacer1, login_col, spacer3 = st.columns([1, 1.5, 1])
-    
     with login_col:
         st.write("<br><br>", unsafe_allow_html=True)
         render_logo(width=100, use_column=True)
@@ -196,6 +192,7 @@ if 'current_price' not in st.session_state: st.session_state.current_price = 0.0
 if 'df_history' not in st.session_state: st.session_state.df_history = pd.DataFrame()
 if 'fundamentals' not in st.session_state: st.session_state.fundamentals = {}
 if 'data_source' not in st.session_state: st.session_state.data_source = ""
+if 'news_data' not in st.session_state: st.session_state.news_data = [] # 新增：新闻状态存储
 
 if st.sidebar.button("➕ 载入新监测标的", type="primary" if st.session_state.sidebar_select == "" else "secondary", use_container_width=True):
     st.session_state.sidebar_select = ""
@@ -232,21 +229,22 @@ default_cost = float(default_data.get('cost', 0.0))
 default_qty = int(default_data.get('qty', 0))
 
 # ==========================================
-#        3. 双引擎智能路由抓取系统
+#        3. 引擎：数据 + 因子 + 资讯抓取
 # ==========================================
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False) # 缓存缩短到半小时，保证新闻新鲜度
 def fetch_multi_factor_data(symbol):
     df = pd.DataFrame()
     fund_data = {"PE": None, "PEG": None, "ROE": None, "Margin": None, "52w_Change": None}
     source_name = "未获取"
+    news_list = []
     
+    # --- 1. 尝试获取海外主数据 & Yahoo 新闻 ---
     try:
-        yf_df = yf.download(symbol, period="1y", progress=False, threads=False)
+        ticker = yf.Ticker(symbol)
+        yf_df = ticker.history(period="1y") # 使用 history 替代 download 兼容性更好
         if yf_df is not None and len(yf_df) > 20:
-            if isinstance(yf_df.columns, pd.MultiIndex): yf_df.columns = yf_df.columns.get_level_values(0)
             df = yf_df
             source_name = "Yahoo Finance Global API"
-            ticker = yf.Ticker(symbol)
             info = ticker.info
             fund_data = {
                 "PE": info.get('trailingPE', info.get('forwardPE', None)),
@@ -255,10 +253,23 @@ def fetch_multi_factor_data(symbol):
                 "Margin": info.get('profitMargins', None),
                 "52w_Change": info.get('52WeekChange', None)
             }
+            # 抓取 Yahoo 英文新闻
+            yf_news = ticker.news
+            if yf_news:
+                for item in yf_news[:5]:
+                    pub_time = datetime.fromtimestamp(item.get('providerPublishTime', 0)).strftime('%Y-%m-%d %H:%M')
+                    news_list.append({
+                        "title": item.get('title', '无标题资讯'),
+                        "publisher": item.get('publisher', 'Global Media'),
+                        "link": item.get('link', '#'),
+                        "time": pub_time
+                    })
     except Exception:
         pass
 
-    if df.empty and (symbol.endswith(".SZ") or symbol.endswith(".SS")):
+    # --- 2. 灾备切换：如果是 A 股，强制拉取东财数据 & 东财中文资讯 ---
+    is_a_share = symbol.endswith(".SZ") or symbol.endswith(".SS")
+    if df.empty and is_a_share:
         try:
             code = symbol.split('.')[0]
             ak_df = ak.stock_zh_a_hist(symbol=code, period="daily", adjust="qfq")
@@ -270,9 +281,27 @@ def fetch_multi_factor_data(symbol):
         except Exception:
             pass
             
-    if df.empty:
-        return None, {}, "主备双引擎数据抓取均失败，请检查代码或网络。", ""
+    # 如果是A股，无论K线来自哪里，覆盖抓取东方财富中文新闻
+    if is_a_share:
+        try:
+            code = symbol.split('.')[0]
+            ak_news = ak.stock_news_em(symbol=code)
+            if not ak_news.empty:
+                news_list = [] # 清空可能抓到的纯英文无用新闻
+                for idx, row in ak_news.head(5).iterrows():
+                    news_list.append({
+                        "title": row.get('新闻标题', 'A股关联资讯'),
+                        "publisher": row.get('文章来源', '东方财富'),
+                        "link": row.get('新闻链接', '#'),
+                        "time": row.get('发布时间', '')
+                    })
+        except Exception:
+            pass
 
+    if df.empty:
+        return None, {}, "主备双引擎数据抓取均失败，请检查代码或网络。", "", []
+
+    # --- 3. 计算多因子指标 ---
     try:
         df['MA20'], df['MA60'] = df['Close'].rolling(window=20).mean(), df['Close'].rolling(window=60).mean()
         df['Vol_MA5'] = df['Volume'].rolling(window=5).mean()
@@ -286,9 +315,9 @@ def fetch_multi_factor_data(symbol):
         rs = gain / loss
         df['RSI'] = 100 - (100 / (1 + rs))
 
-        return df.iloc[-126:], fund_data, "成功", source_name
+        return df.iloc[-126:], fund_data, "成功", source_name, news_list
     except Exception as e:
-        return None, {}, f"指标计算错误: {str(e)}", ""
+        return None, {}, f"指标计算错误: {str(e)}", "", []
 
 def plot_candlestick(df, symbol, name):
     title = f"{name} ({symbol}) - 6个月日K线图" if name else f"{symbol} - 6个月日K线图"
@@ -324,13 +353,14 @@ with st.container():
         st.write("") 
         if st.button("🔄 启动灵犀多维扫描", type="primary", use_container_width=True):
             if input_symbol:
-                with st.spinner(f'FactorX 引擎正在深度解析 {input_symbol} ...'):
-                    df_h, funds, msg, source = fetch_multi_factor_data(input_symbol)
+                with st.spinner(f'FactorX 引擎正在深度解析 {input_symbol} 并搜寻全球资讯...'):
+                    df_h, funds, msg, source, news = fetch_multi_factor_data(input_symbol)
                     if df_h is not None:
                         st.session_state.df_history = df_h
                         st.session_state.current_price = float(df_h.iloc[-1]['Close'])
                         st.session_state.fundamentals = funds
                         st.session_state.data_source = source
+                        st.session_state.news_data = news # 存储新闻数据
                     else: st.error(f"❌ {msg}")
 
 if st.button("💾 将标的写入 FactorX 云端矩阵"):
@@ -409,70 +439,99 @@ if not st.session_state.df_history.empty and st.session_state.current_price > 0:
         elif w52 and w52 < -0.1: st.caption("⚓ 过去一年走势相对疲软。")
 
     st.markdown("---")
-    st.markdown("### 📝 FactorX 综合诊断结论与操作指令")
     
-    score = 0
-    reasons = []
+    # ==========================================
+    # 💡 核心升级：情报与诊断双栏排版
+    # ==========================================
+    col_diag, col_news = st.columns([1.5, 1], gap="large")
+    
+    with col_diag:
+        st.markdown("### 📝 FactorX 综合诊断与指令")
+        score = 0
+        reasons = []
 
-    if current_p > ma60 and ma20 > ma60:
-        score += 1
-        reasons.append("✔ **趋势因子得分：** 价格稳居60日生命线及20日均线上方，处于确定的多头通道。")
-    elif current_p < ma60:
-        score -= 1
-        reasons.append("❌ **趋势因子失分：** 价格已跌破60日生命线，中线资金呈流出态势，技术面承压。")
-    else:
-        reasons.append("➖ **趋势因子纠结：** 均线系统方向未明，处于多空震荡整理期。")
-
-    if pe is not None:
-        if pe < 20 and (roe is not None and roe > 0.10):
+        if current_p > ma60 and ma20 > ma60:
             score += 1
-            reasons.append("✔ **价值因子得分：** 估值较低（PE<20）且盈利能力强劲（ROE>10%），具备优秀的长线配置底座。")
-        elif pe > 40:
+            reasons.append("✔ **趋势因子得分：** 价格稳居60日生命线及20日均线上方，处于确定的多头通道。")
+        elif current_p < ma60:
             score -= 1
-            reasons.append("❌ **价值因子失分：** 动态市盈率偏高，短期存在杀估值的泡沫破裂风险。")
+            reasons.append("❌ **趋势因子失分：** 价格已跌破60日生命线，中线资金呈流出态势，技术面承压。")
+        else:
+            reasons.append("➖ **趋势因子纠结：** 均线系统方向未明，处于多空震荡整理期。")
 
-    if rsi > 70:
-        score -= 1
-        reasons.append("❌ **情绪因子失分：** RSI指标进入超买区，短期散户FOMO情绪严重，极易诱发均线回归回调。")
-    elif rsi < 30:
-        score += 1
-        reasons.append("✔ **情绪因子得分：** RSI指标处于极度冰点，做空动能面临衰竭，具备可操作的技术性反弹条件。")
-    
-    if score >= 2:
-        st.success("🟢 **核心指令：强烈看多 (Strong Buy / Hold)**")
-        st.write("FactorX 扫描结果显示多维因子产生共振向好，建议积极配置或坚定持有底仓，享受趋势红利。")
-    elif score == 1:
-        st.info("🟡 **核心指令：谨慎乐观 (Cautious Optimism)**")
-        st.write("FactorX 扫描显示整体偏向多头，基本面或趋势有亮点，可利用加仓推演模块逢低适度建仓，严守防守线。")
-    elif score == 0:
-        st.warning("⚪ **核心指令：中性观望 (Neutral)**")
-        st.write("多空因子交织对冲，缺乏明确的单边驱动力，建议多看少动，等待方向明朗。")
-    else:
-        st.error("🔴 **核心指令：防范风险 (Risk Warning / Sell)**")
-        st.write("技术面破位或估值严重透支，建议迅速减仓规避，或耐心等待真正的企稳信号，切忌盲目接飞刀。")
+        if pe is not None:
+            if pe < 20 and (roe is not None and roe > 0.10):
+                score += 1
+                reasons.append("✔ **价值因子得分：** 估值较低且盈利强劲，具备优秀长线底座。")
+            elif pe > 40:
+                score -= 1
+                reasons.append("❌ **价值因子失分：** 动态市盈率偏高，存在杀估值泡沫破裂风险。")
 
-    with st.expander("🔍 点击查看 FactorX 详细评分逻辑推演", expanded=True):
-        for reason in reasons:
-            st.markdown(reason)
+        if rsi > 70:
+            score -= 1
+            reasons.append("❌ **情绪因子失分：** RSI进入超买区，散户FOMO情绪严重，极易诱发均线回归回调。")
+        elif rsi < 30:
+            score += 1
+            reasons.append("✔ **情绪因子得分：** RSI处于极度冰点，做空动能衰竭，具备反弹条件。")
+        
+        if score >= 2:
+            st.success("🟢 **核心指令：强烈看多 (Strong Buy)**")
+            st.write("多维因子产生共振向好，建议积极配置或坚定持有底仓，享受趋势红利。")
+        elif score == 1:
+            st.info("🟡 **核心指令：谨慎乐观 (Cautious Optimism)**")
+            st.write("整体偏向多头，基本面或趋势有亮点，可利用加仓推演模块逢低适度建仓，严守防守线。")
+        elif score == 0:
+            st.warning("⚪ **核心指令：中性观望 (Neutral)**")
+            st.write("多空因子交织对冲，缺乏明确单边驱动力，建议多看少动，等待方向明朗。")
+        else:
+            st.error("🔴 **核心指令：防范风险 (Risk Warning / Sell)**")
+            st.write("技术面破位或估值透支，建议迅速减仓规避，切忌盲目接飞刀。")
+
+        with st.expander("🔍 查看评分逻辑推演", expanded=False):
+            for reason in reasons:
+                st.markdown(reason)
+
+    # 💡 新增：灵犀情报局面板
+    with col_news:
+        st.markdown("### 📰 灵犀情报局")
+        st.caption("关联异动研报与机构动向")
+        
+        if st.session_state.news_data:
+            for item in st.session_state.news_data:
+                # 使用 HTML 构建极简的卡片式新闻链接
+                st.markdown(f"""
+                <div style="margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px dashed rgba(130,130,130,0.3);">
+                    <a href="{item['link']}" target="_blank" class="news-link" style="font-size: 14px; line-height: 1.4;">
+                        {item['title']}
+                    </a>
+                    <div style="font-size: 11px; color: gray; margin-top: 4px;">
+                        ⏱️ {item['time']} &nbsp;|&nbsp; 🗞️ {item['publisher']}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+        else:
+            st.info("🕸️ 暂未嗅探到该资产近期的核心关联资讯或研报。")
 
     st.markdown("---")
     with st.expander("📖 FactorX 投研模型说明与数据字典", expanded=False):
         st.markdown("""
         #### 1. 资金与情绪面 (Momentum & Sentiment)
         * **数据来源：** K线衍生计算 (Yahoo Finance / AKShare 双引擎)
-        * **逻辑依据：** * **RSI (相对强弱指数)：** 采用14日周期计算。`RSI > 70` 被视为市场极度贪婪（超买区），系统予以扣分（-1）；`RSI < 30` 被视为市场极度恐慌（超卖区），具备反弹势能，系统予以加分（+1）。
-            * **量能异动：** 对比当日成交量与过去5日平均成交量（Vol_MA5）。若超出均量 1.8 倍，视为资金强介入/强出逃预警。
+        * **逻辑依据：** * **RSI (相对强弱指数)：** `RSI > 70` 视为超买区，扣分（-1）；`RSI < 30` 视为超卖区，加分（+1）。
+            * **量能异动：** 对比当日与过去5日平均成交量。超出 1.8 倍视为资金强介入/强出逃预警。
         
         #### 2. 深度基本面 (Fundamentals)
-        * **数据来源：** Yahoo Finance API 公司财报数据底层接口
-        * **逻辑依据：** * **PE (动态市盈率)：** 衡量回本周期。若 `PE < 20` 且 `ROE > 10%`，代表公司既便宜又能赚钱，符合价值投资审美，系统加分（+1）。若 `PE > 40`，除非有极高成长性消化，否则视为泡沫风险，系统扣分（-1）。
-            * **ROE (净资产收益率)：** 衡量资产盈利能力的核心指标。`ROE > 15%` 判定为优质印钞机。*(注：部分 A 股或宽基 ETF 无直接财报接口，此项自动略过不参与打分。)*
+        * **数据来源：** 财报底层接口
+        * **逻辑依据：** 若 `PE < 20` 且 `ROE > 10%`，符合价值投资审美，加分（+1）。若 `PE > 40`，视为泡沫风险，扣分（-1）。
 
         #### 3. 趋势与宏观对比 (Macro Trend)
-        * **数据来源：** 日K线移动平均计算，及52周价格对比。
-        * **逻辑依据：** * **双均线趋势：** 20日线为短期防守位，60日线为中线牛熊生命线。若现价站稳双线（`现价 > MA60` 且 `MA20 > MA60`），视为右侧交易的绝对多头，系统加分（+1）；跌破 MA60 则视为趋势彻底走坏，系统扣分（-1）。
+        * **数据来源：** 均线及52周价格对比。
+        * **逻辑依据：** 若现价站稳双线（`现价 > MA60` 且 `MA20 > MA60`），视为右侧多头，加分（+1）；跌破 MA60 则扣分（-1）。
+        
+        #### 4. 灵犀情报局 (News & Catalyst)
+        * **数据来源：** Yahoo Finance News API (海外资产) / 东方财富数据中心 (国内A股资产)。由于信息抓取存在延迟，资讯仅供辅助参考。
             
-        > **⚠️ FactorX 终端免责声明：** 本系统多因子评级机制由固定算法量化测算得出。所有结论仅作为交易时的“交叉验证”风控工具，**绝不构成任何实质性的买卖指导及投资理财建议**。实盘交易决策需结合现实宏观政策及个人风险承受能力独立做出，盈亏自负。
+        > **⚠️ 免责声明：** 结论仅作为交易时的“交叉验证”风控工具，**绝不构成任何实质性的买卖指导**。实盘交易盈亏自负。
         """)
 
 else:
