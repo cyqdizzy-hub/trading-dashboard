@@ -19,15 +19,19 @@ st.set_page_config(page_title="FactorX (灵犀终端)", page_icon="🛰️", lay
 def inject_custom_css():
     st.markdown("""
         <style>
+        /* 隐藏多余元素，保留侧边栏控制键 */
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
         header {background-color: transparent !important;}
         [data-testid="stAppDeployButton"] {display: none;}
         
+        /* 全局排版微调 */
         .block-container {
             padding-top: 2rem;
             padding-bottom: 2rem;
         }
+
+        /* 数据卡片悬浮动效 */
         div[data-testid="metric-container"] {
             background-color: rgba(130, 130, 130, 0.05);
             border: 1px solid rgba(130, 130, 130, 0.2);
@@ -40,6 +44,8 @@ def inject_custom_css():
             transform: translateY(-2px);
             box-shadow: 0 8px 15px rgba(0,0,0,0.1);
         }
+
+        /* 按钮圆角与悬浮动效 */
         .stButton > button {
             border-radius: 8px;
             font-weight: 600;
@@ -49,10 +55,14 @@ def inject_custom_css():
             transform: translateY(-2px);
             box-shadow: 0 5px 10px rgba(0,0,0,0.15);
         }
+        
+        /* 登录框标题居中 */
         .login-header {
             text-align: center;
             margin-bottom: 20px;
         }
+
+        /* 新闻链接优雅悬浮效果 */
         .news-link {
             text-decoration: none;
             color: #1E88E5;
@@ -63,6 +73,8 @@ def inject_custom_css():
             text-decoration: underline;
             color: #0D47A1;
         }
+
+        /* 研报按钮样式 */
         .report-btn {
             display: inline-block;
             padding: 10px 15px;
@@ -86,9 +98,10 @@ def inject_custom_css():
 inject_custom_css()
 
 # ==========================================
-#        🖼️ 智能 Logo 渲染模块 (居中高阶版)
+#        🖼️ 智能 Logo 渲染模块 (完美居中版)
 # ==========================================
 def render_logo(width=80, center=False):
+    """智能寻找本地 icon.png 并渲染，使用 HTML/Base64 保证绝对居中和高级阴影"""
     if os.path.exists("icon.png"):
         if center:
             with open("icon.png", "rb") as image_file:
@@ -143,7 +156,7 @@ def get_category(symbol):
     else: return "🌍 其他标的"
 
 # ==========================================
-#        1. 登录系统 
+#        1. 登录系统 (居中排版)
 # ==========================================
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
 if 'current_user' not in st.session_state: st.session_state.current_user = ""
@@ -158,6 +171,7 @@ if "u" in query_params and "p" in query_params and not st.session_state.logged_i
 
 if not st.session_state.logged_in:
     spacer1, login_col, spacer3 = st.columns([1, 1.5, 1])
+    
     with login_col:
         st.write("<br><br>", unsafe_allow_html=True)
         render_logo(width=100, center=True)
@@ -255,7 +269,7 @@ default_cost = float(default_data.get('cost', 0.0))
 default_qty = int(default_data.get('qty', 0))
 
 # ==========================================
-#        3. 全息引擎 (防封锁伪装 + 双引擎灾备)
+#        3. 全息引擎 (极速熔断 + 双引擎灾备强化)
 # ==========================================
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_multi_factor_data(symbol):
@@ -266,14 +280,16 @@ def fetch_multi_factor_data(symbol):
     macro_list = []
     report_url = ""
     
+    symbol = str(symbol).strip().upper()
     is_a_share = symbol.endswith(".SZ") or symbol.endswith(".SS")
-    base_code = symbol.split('.')[0] if is_a_share else symbol
+    # 清洗代码：如果是美股输入了 AAPL.US，强制截取前面的 AAPL 给国内接口用
+    base_code = symbol.split('.')[0] 
 
     # 💡 研报底层直达链接
     if is_a_share:
         report_url = f"https://so.eastmoney.com/Yanbao/s?keyword={base_code}"
     else:
-        report_url = f"https://seekingalpha.com/symbol/{base_code.upper()}"
+        report_url = f"https://seekingalpha.com/symbol/{base_code}"
 
     # 💡 抓取 7x24小时全市场宏观电报 (财联社)
     try:
@@ -288,17 +304,22 @@ def fetch_multi_factor_data(symbol):
     except Exception:
         pass
 
-    # 💡 雅虎主引擎 (带浏览器伪装面具)
+    # 💥 雅虎主引擎 (加入伪装与极速熔断机制)
     try:
         session = requests.Session()
         session.headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
         })
-        ticker = yf.Ticker(symbol, session=session)
-        yf_df = ticker.history(period="1y") 
-        if yf_df is not None and len(yf_df) > 20:
+        
+        # 强行设置 timeout=3，防止死锁卡顿
+        yf_df = yf.download(symbol, period="1y", session=session, timeout=3, progress=False) 
+        
+        if yf_df is not None and not yf_df.empty and len(yf_df) > 20:
+            if isinstance(yf_df.columns, pd.MultiIndex): yf_df.columns = yf_df.columns.get_level_values(0)
             df = yf_df
             source_name = "Yahoo Finance Global API"
+            
+            ticker = yf.Ticker(symbol, session=session)
             info = ticker.info
             fund_data = {
                 "PE": info.get('trailingPE', info.get('forwardPE', None)),
@@ -317,16 +338,18 @@ def fetch_multi_factor_data(symbol):
                         "link": item.get('link', '#'),
                         "time": pub_time
                     })
-    except Exception:
+    except Exception as e:
+        print(f"Yahoo 引擎超时熔断: {e}")
         pass
 
-    # 💡 AKShare 灾备引擎 (全面覆盖 A股 与 美股兜底)
+    # 💥 AKShare 灾备引擎 (强化美股镜像抓取)
     if df.empty:
         try:
             if is_a_share:
                 ak_df = ak.stock_zh_a_hist(symbol=base_code, period="daily", adjust="qfq")
-                source_name = "AKShare (东方财富A股数据)"
+                source_name = "AKShare (东方财富A股底层数据)"
             else:
+                # 美股备胎：强制使用清洗后的纯字母代码 (如 AAPL)
                 ak_df = ak.stock_us_hist(symbol=base_code, period="daily", adjust="qfq")
                 source_name = "AKShare (国内镜像美股数据)"
 
@@ -334,10 +357,11 @@ def fetch_multi_factor_data(symbol):
                 ak_df.rename(columns={'日期':'Date', '开盘':'Open', '收盘':'Close', '最高':'High', '最低':'Low', '成交量':'Volume'}, inplace=True)
                 ak_df.index = pd.to_datetime(ak_df['Date'])
                 df = ak_df.tail(250)
-        except Exception:
+        except Exception as e:
+            print(f"AKShare 备胎引擎失败: {e}")
             pass
             
-    # 如果是A股，覆盖抓取东方财富中文新闻
+    # A股强制覆盖抓取中文新闻
     if is_a_share:
         try:
             ak_news = ak.stock_news_em(symbol=base_code)
@@ -354,7 +378,7 @@ def fetch_multi_factor_data(symbol):
             pass
 
     if df.empty:
-        return None, {}, "双引擎穿透均失败，请检查代码拼写或本机网络状况。", "", [], [], ""
+        return None, {}, "主备双引擎穿透均失败，请检查代码拼写或本机网络状况。", "", [], [], ""
 
     # --- 计算技术面指标 ---
     try:
