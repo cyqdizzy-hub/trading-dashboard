@@ -86,7 +86,7 @@ def inject_custom_css():
 inject_custom_css()
 
 # ==========================================
-#        🖼️ 智能 Logo 渲染模块
+#        🖼️ 智能 Logo 渲染模块 (居中高阶版)
 # ==========================================
 def render_logo(width=80, center=False):
     if os.path.exists("icon.png"):
@@ -217,8 +217,8 @@ if 'df_history' not in st.session_state: st.session_state.df_history = pd.DataFr
 if 'fundamentals' not in st.session_state: st.session_state.fundamentals = {}
 if 'data_source' not in st.session_state: st.session_state.data_source = ""
 if 'news_data' not in st.session_state: st.session_state.news_data = [] 
-if 'macro_news' not in st.session_state: st.session_state.macro_news = [] # 新增：宏观电报存储
-if 'report_link' not in st.session_state: st.session_state.report_link = "" # 新增：智能研报链接
+if 'macro_news' not in st.session_state: st.session_state.macro_news = [] 
+if 'report_link' not in st.session_state: st.session_state.report_link = "" 
 
 if st.sidebar.button("➕ 载入新监测标的", type="primary" if st.session_state.sidebar_select == "" else "secondary", use_container_width=True):
     st.session_state.sidebar_select = ""
@@ -255,9 +255,9 @@ default_cost = float(default_data.get('cost', 0.0))
 default_qty = int(default_data.get('qty', 0))
 
 # ==========================================
-#        3. 全息引擎：数据 + 因子 + 宏观情报抓取
+#        3. 全息引擎 (防封锁伪装 + 双引擎灾备)
 # ==========================================
-@st.cache_data(ttl=600, show_spinner=False) # 缓存缩短到10分钟，保证财联社电报实时性
+@st.cache_data(ttl=600, show_spinner=False)
 def fetch_multi_factor_data(symbol):
     df = pd.DataFrame()
     fund_data = {"PE": None, "PEG": None, "ROE": None, "Margin": None, "52w_Change": None}
@@ -269,18 +269,17 @@ def fetch_multi_factor_data(symbol):
     is_a_share = symbol.endswith(".SZ") or symbol.endswith(".SS")
     base_code = symbol.split('.')[0] if is_a_share else symbol
 
-    # 💡 核心升级 1：生成智能研报底层直达链接
+    # 💡 研报底层直达链接
     if is_a_share:
         report_url = f"https://so.eastmoney.com/Yanbao/s?keyword={base_code}"
     else:
         report_url = f"https://seekingalpha.com/symbol/{base_code.upper()}"
 
-    # 💡 核心升级 2：抓取 7x24小时全市场宏观电报 (财联社)
+    # 💡 抓取 7x24小时全市场宏观电报 (财联社)
     try:
         cls_df = ak.stock_zh_a_alerts_cls()
         if not cls_df.empty:
             for idx, row in cls_df.head(6).iterrows():
-                # 过滤掉过短的无用通知
                 if len(str(row.get('内容', ''))) > 15:
                     macro_list.append({
                         "time": str(row.get('时间', ''))[-8:],
@@ -289,9 +288,13 @@ def fetch_multi_factor_data(symbol):
     except Exception:
         pass
 
-    # --- 尝试获取海外数据 & Yahoo 英文个股新闻 ---
+    # 💡 雅虎主引擎 (带浏览器伪装面具)
     try:
-        ticker = yf.Ticker(symbol)
+        session = requests.Session()
+        session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+        })
+        ticker = yf.Ticker(symbol, session=session)
         yf_df = ticker.history(period="1y") 
         if yf_df is not None and len(yf_df) > 20:
             df = yf_df
@@ -305,7 +308,7 @@ def fetch_multi_factor_data(symbol):
                 "52w_Change": info.get('52WeekChange', None)
             }
             yf_news = ticker.news
-            if yf_news and not is_a_share: # A股不用外媒新闻
+            if yf_news and not is_a_share:
                 for item in yf_news[:6]:
                     pub_time = datetime.fromtimestamp(item.get('providerPublishTime', 0)).strftime('%m-%d %H:%M')
                     news_list.append({
@@ -317,18 +320,24 @@ def fetch_multi_factor_data(symbol):
     except Exception:
         pass
 
-    # --- 灾备与A股增强：强制拉取东财数据 & 东财中文资讯 ---
-    if df.empty and is_a_share:
+    # 💡 AKShare 灾备引擎 (全面覆盖 A股 与 美股兜底)
+    if df.empty:
         try:
-            ak_df = ak.stock_zh_a_hist(symbol=base_code, period="daily", adjust="qfq")
+            if is_a_share:
+                ak_df = ak.stock_zh_a_hist(symbol=base_code, period="daily", adjust="qfq")
+                source_name = "AKShare (东方财富A股数据)"
+            else:
+                ak_df = ak.stock_us_hist(symbol=base_code, period="daily", adjust="qfq")
+                source_name = "AKShare (国内镜像美股数据)"
+
             if not ak_df.empty:
                 ak_df.rename(columns={'日期':'Date', '开盘':'Open', '收盘':'Close', '最高':'High', '最低':'Low', '成交量':'Volume'}, inplace=True)
                 ak_df.index = pd.to_datetime(ak_df['Date'])
                 df = ak_df.tail(250)
-                source_name = "AKShare (东方财富底层数据)"
         except Exception:
             pass
             
+    # 如果是A股，覆盖抓取东方财富中文新闻
     if is_a_share:
         try:
             ak_news = ak.stock_news_em(symbol=base_code)
@@ -339,13 +348,13 @@ def fetch_multi_factor_data(symbol):
                         "title": row.get('新闻标题', 'A股关联资讯'),
                         "publisher": row.get('文章来源', '东方财富'),
                         "link": row.get('新闻链接', '#'),
-                        "time": row.get('发布时间', '')[-14:-3] # 截取精简时间
+                        "time": row.get('发布时间', '')[-14:-3] 
                     })
         except Exception:
             pass
 
     if df.empty:
-        return None, {}, "数据抓取失败，请检查代码。", "", [], [], ""
+        return None, {}, "双引擎穿透均失败，请检查代码拼写或本机网络状况。", "", [], [], ""
 
     # --- 计算技术面指标 ---
     try:
